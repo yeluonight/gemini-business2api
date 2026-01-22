@@ -240,7 +240,9 @@ const errorMessage = ref('')
 const rateLimitCooldownHours = computed({
   get: () => {
     if (!localSettings.value?.retry?.rate_limit_cooldown_seconds) return 1
-    return Math.round(localSettings.value.retry.rate_limit_cooldown_seconds / 3600)
+    const seconds = localSettings.value.retry.rate_limit_cooldown_seconds
+    const hours = Math.round(seconds / 3600)
+    return hours < 1 || hours > 12 ? 1 : hours
   },
   set: (hours: number) => {
     if (localSettings.value?.retry) {

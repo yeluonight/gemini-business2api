@@ -166,9 +166,14 @@ class ConfigManager:
             **yaml_data.get("image_generation", {})
         )
 
-        retry_config = RetryConfig(
-            **yaml_data.get("retry", {})
-        )
+        # 加载重试配置，自动修正不在 1-12 小时范围内的值
+        retry_data = yaml_data.get("retry", {})
+        if "rate_limit_cooldown_seconds" in retry_data:
+            value = retry_data["rate_limit_cooldown_seconds"]
+            if value < 3600 or value > 43200:  # 不在 1-12 小时范围，默认 1 小时
+                retry_data["rate_limit_cooldown_seconds"] = 3600
+
+        retry_config = RetryConfig(**retry_data)
 
         public_display_config = PublicDisplayConfig(
             **yaml_data.get("public_display", {})
