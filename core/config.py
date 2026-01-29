@@ -275,16 +275,15 @@ class ConfigManager:
         )
 
     def _load_yaml(self) -> dict:
-        """从数据库加载配置（严格模式）"""
+        """从数据库加载配置（允许空配置）。"""
         if storage.is_database_enabled():
             try:
                 data = storage.load_settings_sync()
 
-                # 严格模式：数据库连接失败时抛出异常
+                # 允许空库启动：None 可能是空配置或连接异常
                 if data is None:
-                    print("[ERROR] 数据库连接失败")
-                    print("[ERROR] 请检查 DATABASE_URL 配置或网络连接")
-                    raise RuntimeError("数据库连接失败，应用无法启动")
+                    print("[WARN] 未读取到 settings（可能为空库或连接异常），将使用默认配置启动")
+                    return {}
 
                 if isinstance(data, dict):
                     return data
