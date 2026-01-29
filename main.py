@@ -1,4 +1,4 @@
-import json, time, os, asyncio, uuid, ssl, re, yaml, shutil, base64
+import json, time, os, asyncio, uuid, ssl, re, yaml, base64
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Union, Dict, Any
 from pathlib import Path
@@ -17,21 +17,14 @@ from collections import deque
 from threading import Lock
 
 # ---------- 数据目录配置 ----------
-# 自动检测环境：HF Spaces Pro 使用 /data，本地使用 ./data
-if os.path.exists("/data"):
-    DATA_DIR = "/data"  # HF Pro 持久化存储
-    logger_prefix = "[HF-PRO]"
-else:
-    DATA_DIR = "./data"  # 本地持久化存储
-    logger_prefix = "[LOCAL]"
+DATA_DIR = "./data"
+logger_prefix = "[LOCAL]"
 
 # 确保数据目录存在
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # 统一的数据文件路径
-ACCOUNTS_FILE = os.path.join(DATA_DIR, "accounts.json")
-SETTINGS_FILE = os.path.join(DATA_DIR, "settings.yaml")
-STATS_FILE = os.path.join(DATA_DIR, "stats.json")
+TASK_HISTORY_MTIME: float = 0.0
 IMAGE_DIR = os.path.join(DATA_DIR, "images")
 VIDEO_DIR = os.path.join(DATA_DIR, "videos")
 
@@ -97,25 +90,18 @@ log_lock = Lock()
 stats_lock = asyncio.Lock()  # 改为异步锁
 
 async def load_stats():
-    """加载统计数据（异步）。"""
+    """加载统计数据（异步）。数据库不可用时使用内存默认值。"""
     data = None
     if storage.is_database_enabled():
         try:
-            data = await asyncio.to_thread(storage.load_stats_sync)
-            if not isinstance(data, dict):
-                data = None
+            has_stats = await asyncio.to_thread(storage.has_stats_sync)
+            if has_stats:
+                data = await asyncio.to_thread(storage.load_stats_sync)
+                if not isinstance(data, dict):
+                    data = None
         except Exception as e:
             logger.error(f"[STATS] 数据库加载失败: {str(e)[:50]}")
-    if data is None:
-        try:
-            if os.path.exists(STATS_FILE):
-                async with aiofiles.open(STATS_FILE, 'r', encoding='utf-8') as f:
-                    content = await f.read()
-                    data = json.loads(content)
-        except Exception:
-            pass
 
-    # 如果没有加载到数据，返回默认值
     if data is None:
         data = {
             "total_visitors": 0,
@@ -129,7 +115,6 @@ async def load_stats():
             "recent_conversations": []
         }
 
-    # 将列表转换为 deque（限制大小防止内存无限增长）
     if isinstance(data.get("request_timestamps"), list):
         data["request_timestamps"] = deque(data["request_timestamps"], maxlen=20000)
     if isinstance(data.get("failure_timestamps"), list):
@@ -140,8 +125,7 @@ async def load_stats():
     return data
 
 async def save_stats(stats):
-    """保存统计数据（异步，避免阻塞事件循环）"""
-    # 将 deque 转换为 list 以便 JSON 序列化
+    """保存统计数据（异步）。数据库不可用时不落盘。"""
     stats_to_save = stats.copy()
     if isinstance(stats_to_save.get("request_timestamps"), deque):
         stats_to_save["request_timestamps"] = list(stats_to_save["request_timestamps"])
@@ -157,11 +141,7 @@ async def save_stats(stats):
                 return
         except Exception as e:
             logger.error(f"[STATS] 数据库保存失败: {str(e)[:50]}")
-    try:
-        async with aiofiles.open(STATS_FILE, 'w', encoding='utf-8') as f:
-            await f.write(json.dumps(stats_to_save, ensure_ascii=False, indent=2))
-    except Exception as e:
-        logger.error(f"[STATS] 保存统计数据失败: {str(e)[:50]}")
+    return
 
 # 初始化统计数据（需要在启动时异步加载）
 global_stats = {
@@ -176,11 +156,76 @@ global_stats = {
     "recent_conversations": []
 }
 
+# 任务历史记录（内存存储，容器重启后清空）
+task_history = deque(maxlen=100)  # 最多保留100条历史记录
+task_history_lock = Lock()
+
 
 def get_beijing_time_str(ts: Optional[float] = None) -> str:
     tz = timezone(timedelta(hours=8))
     current = datetime.fromtimestamp(ts or time.time(), tz=tz)
     return current.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def save_task_to_history(task_type: str, task_data: dict) -> None:
+    """保存任务历史记录（只存储简要信息）"""
+    with task_history_lock:
+        history_entry = _build_history_entry(task_type, task_data)
+        entry_id = history_entry.get("id")
+        if entry_id:
+            for i in range(len(task_history) - 1, -1, -1):
+                if task_history[i].get("id") == entry_id:
+                    task_history.remove(task_history[i])
+                    break
+        task_history.append(history_entry)
+        _persist_task_history()
+        logger.info(f"[HISTORY] Saved {task_type} task to history: {history_entry['id']}")
+
+
+def _build_history_entry(task_type: str, task_data: dict, is_live: bool = False) -> dict:
+    total_value = task_data.get("count") if task_type == "register" else len(task_data.get("account_ids", []))
+    return {
+        "id": task_data.get("id", ""),
+        "type": task_type,  # "register" or "login"
+        "status": task_data.get("status", ""),
+        "progress": task_data.get("progress", 0),
+        "total": total_value,
+        "success_count": task_data.get("success_count", 0),
+        "fail_count": task_data.get("fail_count", 0),
+        "created_at": task_data.get("created_at", time.time()),
+        "finished_at": task_data.get("finished_at"),
+        "is_live": is_live,
+    }
+
+
+def _persist_task_history() -> None:
+    """持久化任务历史到数据库（仅数据库模式）。"""
+    if not storage.is_database_enabled():
+        return
+    try:
+        if not task_history:
+            storage.clear_task_history_sync()
+            return
+        storage.save_task_history_entry_sync(task_history[-1])
+    except Exception as exc:
+        logger.warning(f"[HISTORY] Persist task history failed: {exc}")
+
+
+def _load_task_history() -> None:
+    """从数据库加载任务历史（仅数据库模式）。"""
+    if not storage.is_database_enabled():
+        return
+    try:
+        history = storage.load_task_history_sync(limit=100)
+        if not isinstance(history, list):
+            return
+        with task_history_lock:
+            task_history.clear()
+            for entry in history:
+                if isinstance(entry, dict):
+                    task_history.append(entry)
+    except Exception as exc:
+        logger.warning(f"[HISTORY] Load task history failed: {exc}")
 
 
 def build_recent_conversation_entry(
@@ -268,6 +313,8 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("gemini")
+
+_load_task_history()
 
 # ---------- Linux zombie process reaper ----------
 # DrissionPage / Chromium may spawn subprocesses that exit without being waited on,
@@ -616,12 +663,8 @@ os.makedirs(IMAGE_DIR, exist_ok=True)
 os.makedirs(VIDEO_DIR, exist_ok=True)
 app.mount("/images", StaticFiles(directory=IMAGE_DIR), name="images")
 app.mount("/videos", StaticFiles(directory=VIDEO_DIR), name="videos")
-if IMAGE_DIR == "/data/images":
-    logger.info(f"[SYSTEM] 图片静态服务已启用: /images/ -> {IMAGE_DIR} (HF Pro持久化)")
-    logger.info(f"[SYSTEM] 视频静态服务已启用: /videos/ -> {VIDEO_DIR} (HF Pro持久化)")
-else:
-    logger.info(f"[SYSTEM] 图片静态服务已启用: /images/ -> {IMAGE_DIR} (本地持久化)")
-    logger.info(f"[SYSTEM] 视频静态服务已启用: /videos/ -> {VIDEO_DIR} (本地持久化)")
+logger.info(f"[SYSTEM] 图片静态服务已启用: /images/ -> {IMAGE_DIR}")
+logger.info(f"[SYSTEM] 视频静态服务已启用: /videos/ -> {VIDEO_DIR}")
 
 # ---------- 后台任务启动 ----------
 
@@ -694,15 +737,6 @@ async def startup_event():
     """应用启动时初始化后台任务"""
     global global_stats
 
-    # 文件迁移逻辑：将根目录的旧文件迁移到 data 目录
-    old_accounts = "accounts.json"
-    if os.path.exists(old_accounts) and not os.path.exists(ACCOUNTS_FILE):
-        try:
-            shutil.copy(old_accounts, ACCOUNTS_FILE)
-            logger.info(f"{logger_prefix} 已迁移 {old_accounts} -> {ACCOUNTS_FILE}")
-        except Exception as e:
-            logger.warning(f"{logger_prefix} 文件迁移失败: {e}")
-
     # 加载统计数据
     global_stats = await load_stats()
     global_stats.setdefault("request_timestamps", [])
@@ -727,11 +761,11 @@ async def startup_event():
     elif storage.is_database_enabled():
         logger.info("[SYSTEM] 自动刷新账号功能已禁用（配置为0）")
 
-    # 启动自动登录刷新轮询
+    # 启动自动登录刷新轮询（始终启动，但默认禁用）
     if login_service:
         try:
             asyncio.create_task(login_service.start_polling())
-            logger.info("[SYSTEM] 账户过期检查轮询已启动（间隔: 30分钟）")
+            logger.info("[SYSTEM] 账户刷新轮询服务已启动（默认禁用，可在设置中启用）")
         except Exception as e:
             logger.error(f"[SYSTEM] 启动登录服务失败: {e}")
     else:
@@ -1237,37 +1271,6 @@ async def admin_check_login_refresh(request: Request):
         return {"status": "idle"}
     return task.to_dict()
 
-@app.post("/admin/auto-refresh/pause")
-@require_login()
-async def admin_pause_auto_refresh(request: Request):
-    """暂停自动刷新（运行时开关，不保存到数据库）"""
-    if not login_service:
-        raise HTTPException(503, "login service unavailable")
-    login_service.pause_auto_refresh()
-    return {"status": "paused", "message": "Auto-refresh paused (runtime only)"}
-
-@app.post("/admin/auto-refresh/resume")
-@require_login()
-async def admin_resume_auto_refresh(request: Request):
-    """恢复自动刷新并立即执行一次检查"""
-    if not login_service:
-        raise HTTPException(503, "login service unavailable")
-    was_paused = login_service.resume_auto_refresh()
-    # 如果之前是暂停状态，立即执行一次检查
-    if was_paused:
-        asyncio.create_task(login_service.check_and_refresh())
-        return {"status": "active", "message": "Auto-refresh resumed and checking now"}
-    return {"status": "active", "message": "Auto-refresh resumed"}
-
-@app.get("/admin/auto-refresh/status")
-@require_login()
-async def admin_get_auto_refresh_status(request: Request):
-    """获取自动刷新状态"""
-    if not login_service:
-        raise HTTPException(503, "login service unavailable")
-    is_paused = login_service.is_auto_refresh_paused()
-    return {"paused": is_paused, "status": "paused" if is_paused else "active"}
-
 @app.delete("/admin/accounts/{account_id}")
 @require_login()
 async def admin_delete_account(request: Request, account_id: str):
@@ -1428,7 +1431,9 @@ async def admin_get_settings(request: Request):
             "account_failure_threshold": config.retry.account_failure_threshold,
             "rate_limit_cooldown_seconds": config.retry.rate_limit_cooldown_seconds,
             "session_cache_ttl_seconds": config.retry.session_cache_ttl_seconds,
-            "auto_refresh_accounts_seconds": config.retry.auto_refresh_accounts_seconds
+            "auto_refresh_accounts_seconds": config.retry.auto_refresh_accounts_seconds,
+            "scheduled_refresh_enabled": config.retry.scheduled_refresh_enabled,
+            "scheduled_refresh_interval_minutes": config.retry.scheduled_refresh_interval_minutes
         },
         "public_display": {
             "logo_url": config.public_display.logo_url,
@@ -1492,6 +1497,8 @@ async def admin_update_settings(request: Request, new_settings: dict = Body(...)
 
         retry = dict(new_settings.get("retry") or {})
         retry.setdefault("auto_refresh_accounts_seconds", config.retry.auto_refresh_accounts_seconds)
+        retry.setdefault("scheduled_refresh_enabled", config.retry.scheduled_refresh_enabled)
+        retry.setdefault("scheduled_refresh_interval_minutes", config.retry.scheduled_refresh_interval_minutes)
         new_settings["retry"] = retry
 
         # 保存旧配置用于对比
@@ -1668,6 +1675,58 @@ async def admin_clear_logs(request: Request, confirm: str = None):
         log_buffer.clear()
     logger.info("[LOG] 日志已清空")
     return {"status": "success", "message": "已清空内存日志", "cleared_count": cleared_count}
+
+@app.get("/admin/task-history")
+@require_login()
+async def admin_get_task_history(request: Request, limit: int = 100):
+    """获取任务历史记录"""
+    _load_task_history()
+    with task_history_lock:
+        history = list(task_history)
+
+    live_entries = []
+    try:
+        if register_service:
+            current_register = register_service.get_current_task()
+            if current_register and current_register.status in ("running", "pending"):
+                live_entries.append(_build_history_entry("register", current_register.to_dict(), is_live=True))
+        if login_service:
+            current_login = login_service.get_current_task()
+            if current_login and current_login.status in ("running", "pending"):
+                live_entries.append(_build_history_entry("login", current_login.to_dict(), is_live=True))
+    except Exception as exc:
+        logger.warning(f"[HISTORY] build live entries failed: {exc}")
+
+    merged = {}
+    for entry in live_entries + history:
+        entry_id = entry.get("id") or str(uuid.uuid4())
+        if entry_id not in merged:
+            merged[entry_id] = entry
+
+    # 按创建时间倒序排序
+    history = list(merged.values())
+    history.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+
+    # 限制返回数量
+    limit = min(limit, 100)
+    return {
+        "total": len(history),
+        "limit": limit,
+        "history": history[:limit]
+    }
+
+@app.delete("/admin/task-history")
+@require_login()
+async def admin_clear_task_history(request: Request, confirm: str = None):
+    """清空任务历史记录"""
+    if confirm != "yes":
+        raise HTTPException(400, "需要 confirm=yes 参数确认清空操作")
+    with task_history_lock:
+        cleared_count = len(task_history)
+        task_history.clear()
+        _persist_task_history()
+    logger.info("[HISTORY] 任务历史已清空")
+    return {"status": "success", "message": "已清空任务历史", "cleared_count": cleared_count}
 
 # ---------- Auth endpoints (API) ----------
 

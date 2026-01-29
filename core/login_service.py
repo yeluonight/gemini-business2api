@@ -17,6 +17,9 @@ from core.microsoft_mail_client import MicrosoftMailClient
 
 logger = logging.getLogger("gemini.login")
 
+# 常量定义
+CONFIG_CHECK_INTERVAL_SECONDS = 60  # 配置检查间隔（秒）
+
 
 @dataclass
 class LoginTask(BaseTask):
@@ -56,7 +59,6 @@ class LoginService(BaseTaskService[LoginTask]):
             log_prefix="REFRESH",
         )
         self._is_polling = False
-        self._auto_refresh_paused = True  # 运行时开关：默认暂停（不自动刷新）
 
     async def start_login(self, account_ids: List[str]) -> LoginTask:
         """启动登录任务（支持排队）。"""
@@ -340,38 +342,28 @@ class LoginService(BaseTaskService[LoginTask]):
             return
 
         self._is_polling = True
-        logger.info("[LOGIN] refresh polling started (interval: 30 minutes)")
+        logger.info("[LOGIN] refresh polling started")
         try:
             while self._is_polling:
-                # 检查运行时开关
-                if not self._auto_refresh_paused:
-                    await self.check_and_refresh()
-                else:
-                    logger.debug("[LOGIN] auto-refresh paused, skipping check")
-                await asyncio.sleep(1800)
+                # 检查配置是否启用定时刷新
+                if not config.retry.scheduled_refresh_enabled:
+                    logger.debug("[LOGIN] scheduled refresh disabled, skipping check")
+                    await asyncio.sleep(CONFIG_CHECK_INTERVAL_SECONDS)
+                    continue
+
+                # 执行刷新检查
+                await self.check_and_refresh()
+
+                # 使用配置的间隔时间
+                interval_seconds = config.retry.scheduled_refresh_interval_minutes * 60
+                logger.debug(f"[LOGIN] next check in {config.retry.scheduled_refresh_interval_minutes} minutes")
+                await asyncio.sleep(interval_seconds)
         except asyncio.CancelledError:
             logger.info("[LOGIN] polling stopped")
         except Exception as exc:
             logger.error("[LOGIN] polling error: %s", exc)
         finally:
             self._is_polling = False
-
-    def pause_auto_refresh(self) -> None:
-        """暂停自动刷新（不保存到数据库，重启后恢复）"""
-        self._auto_refresh_paused = True
-        logger.info("[LOGIN] auto-refresh paused (runtime only)")
-
-    def resume_auto_refresh(self) -> None:
-        """恢复自动刷新"""
-        was_paused = self._auto_refresh_paused
-        self._auto_refresh_paused = False
-        logger.info("[LOGIN] auto-refresh resumed")
-        # 如果是从暂停状态恢复，返回 True 表示需要立即检查
-        return was_paused
-
-    def is_auto_refresh_paused(self) -> bool:
-        """获取自动刷新暂停状态"""
-        return self._auto_refresh_paused
 
     def stop_polling(self) -> None:
         self._is_polling = False

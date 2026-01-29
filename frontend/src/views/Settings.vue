@@ -86,6 +86,38 @@
             </div>
 
             <div class="rounded-2xl border border-border bg-card p-4">
+              <p class="text-xs uppercase tracking-[0.3em] text-muted-foreground">重试</p>
+              <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
+                <label class="col-span-2 text-xs text-muted-foreground">新会话尝试次数</label>
+                <input v-model.number="localSettings.retry.max_new_session_tries" type="number" min="1" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
+
+                <label class="col-span-2 text-xs text-muted-foreground">请求重试次数</label>
+                <input v-model.number="localSettings.retry.max_request_retries" type="number" min="0" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
+
+                <label class="col-span-2 text-xs text-muted-foreground">账号切换次数</label>
+                <input v-model.number="localSettings.retry.max_account_switch_tries" type="number" min="1" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
+
+                <label class="col-span-2 text-xs text-muted-foreground">失败阈值</label>
+                <input v-model.number="localSettings.retry.account_failure_threshold" type="number" min="1" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
+
+                <label class="col-span-2 text-xs text-muted-foreground">限流冷却（小时）</label>
+                <input v-model.number="rateLimitCooldownHours" type="number" min="1" max="12" step="1" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
+
+                <label class="col-span-2 text-xs text-muted-foreground">会话缓存秒数</label>
+                <input v-model.number="localSettings.retry.session_cache_ttl_seconds" type="number" min="0" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
+
+                <div class="col-span-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <span>自动刷新账号间隔（秒，0禁用）</span>
+                  <HelpTip text="仅在数据库存储启用时生效：用于检测账号配置变化并重载列表，不会刷新 cookie。文件存储模式不会触发。" />
+                </div>
+                <input v-model.number="localSettings.retry.auto_refresh_accounts_seconds" type="number" min="0" max="600" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
+              </div>
+            </div>
+
+          </div>
+
+          <div class="space-y-4">
+            <div class="rounded-2xl border border-border bg-card p-4">
               <p class="text-xs uppercase tracking-[0.3em] text-muted-foreground">自动注册/刷新</p>
               <div class="mt-4 space-y-3">
                 <div class="grid grid-cols-2 items-center gap-x-6 gap-y-2">
@@ -114,9 +146,6 @@
                   :options="tempMailProviderOptions"
                   class="w-full"
                 />
-                <div class="rounded-2xl border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
-                  <span class="font-medium">⚠️ 提示：</span>除 DuckMail 外，其它邮箱服务未经充分测试（直接合并 PR），如遇问题请提交 Issues
-                </div>
                 <div class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                   <span>临时邮箱代理</span>
                   <HelpTip text="启用后临时邮箱请求将使用账户操作代理地址。" />
@@ -234,16 +263,6 @@
                   />
                 </template>
 
-                <div class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                  <span>过期刷新窗口（小时）</span>
-                  <HelpTip text="当账号距离过期小于等于该值时，会触发自动登录刷新（更新 cookie/session）。" />
-                </div>
-                <input
-                  v-model.number="localSettings.basic.refresh_window_hours"
-                  type="number"
-                  min="0"
-                  class="w-full rounded-2xl border border-input bg-background px-3 py-2 text-sm"
-                />
                 <label class="block text-xs text-muted-foreground">默认注册数量</label>
                 <input
                   v-model.number="localSettings.basic.register_default_count"
@@ -251,38 +270,6 @@
                   min="1"
                   class="w-full rounded-2xl border border-input bg-background px-3 py-2 text-sm"
                 />
-              </div>
-            </div>
-
-          </div>
-
-          <div class="space-y-4">
-            <div class="rounded-2xl border border-border bg-card p-4">
-              <p class="text-xs uppercase tracking-[0.3em] text-muted-foreground">重试</p>
-              <div class="mt-4 grid grid-cols-2 gap-3 text-sm">
-                <label class="col-span-2 text-xs text-muted-foreground">新会话尝试次数</label>
-                <input v-model.number="localSettings.retry.max_new_session_tries" type="number" min="1" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
-
-                <label class="col-span-2 text-xs text-muted-foreground">请求重试次数</label>
-                <input v-model.number="localSettings.retry.max_request_retries" type="number" min="0" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
-
-                <label class="col-span-2 text-xs text-muted-foreground">账号切换次数</label>
-                <input v-model.number="localSettings.retry.max_account_switch_tries" type="number" min="1" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
-
-                <label class="col-span-2 text-xs text-muted-foreground">失败阈值</label>
-                <input v-model.number="localSettings.retry.account_failure_threshold" type="number" min="1" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
-
-                <label class="col-span-2 text-xs text-muted-foreground">限流冷却（小时）</label>
-                <input v-model.number="rateLimitCooldownHours" type="number" min="1" max="12" step="1" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
-
-                <label class="col-span-2 text-xs text-muted-foreground">会话缓存秒数</label>
-                <input v-model.number="localSettings.retry.session_cache_ttl_seconds" type="number" min="0" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
-
-                <div class="col-span-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                  <span>自动刷新账号间隔（秒，0禁用）</span>
-                  <HelpTip text="仅在数据库存储启用时生效：用于检测账号配置变化并重载列表，不会刷新 cookie。文件存储模式不会触发。" />
-                </div>
-                <input v-model.number="localSettings.retry.auto_refresh_accounts_seconds" type="number" min="0" max="600" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
               </div>
             </div>
           </div>

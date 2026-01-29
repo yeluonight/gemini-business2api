@@ -103,6 +103,8 @@ export interface Settings {
     rate_limit_cooldown_seconds: number
     session_cache_ttl_seconds: number
     auto_refresh_accounts_seconds: number
+    scheduled_refresh_enabled?: boolean
+    scheduled_refresh_interval_minutes?: number
   }
   public_display: {
     logo_url?: string
