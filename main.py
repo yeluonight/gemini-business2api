@@ -417,7 +417,6 @@ def build_retry_policy() -> RetryPolicy:
             text=config.retry.text_rate_limit_cooldown_seconds,
             images=config.retry.images_rate_limit_cooldown_seconds,
             videos=config.retry.videos_rate_limit_cooldown_seconds,
-            global_cooldown=config.retry.global_cooldown_seconds,
         ),
     )
 
@@ -1466,7 +1465,6 @@ async def admin_get_settings(request: Request):
             "text_rate_limit_cooldown_seconds": config.retry.text_rate_limit_cooldown_seconds,
             "images_rate_limit_cooldown_seconds": config.retry.images_rate_limit_cooldown_seconds,
             "videos_rate_limit_cooldown_seconds": config.retry.videos_rate_limit_cooldown_seconds,
-            "global_cooldown_seconds": config.retry.global_cooldown_seconds,
             "session_cache_ttl_seconds": config.retry.session_cache_ttl_seconds,
             "auto_refresh_accounts_seconds": config.retry.auto_refresh_accounts_seconds,
             "scheduled_refresh_enabled": config.retry.scheduled_refresh_enabled,
@@ -1549,7 +1547,6 @@ async def admin_update_settings(request: Request, new_settings: dict = Body(...)
             "text_rate_limit_cooldown_seconds": RETRY_POLICY.cooldowns.text,
             "images_rate_limit_cooldown_seconds": RETRY_POLICY.cooldowns.images,
             "videos_rate_limit_cooldown_seconds": RETRY_POLICY.cooldowns.videos,
-            "global_cooldown_seconds": RETRY_POLICY.cooldowns.global_cooldown,
             "session_cache_ttl_seconds": SESSION_CACHE_TTL_SECONDS
         }
 
@@ -1642,7 +1639,6 @@ async def admin_update_settings(request: Request, new_settings: dict = Body(...)
             old_retry_config["text_rate_limit_cooldown_seconds"] != RETRY_POLICY.cooldowns.text or
             old_retry_config["images_rate_limit_cooldown_seconds"] != RETRY_POLICY.cooldowns.images or
             old_retry_config["videos_rate_limit_cooldown_seconds"] != RETRY_POLICY.cooldowns.videos or
-            old_retry_config["global_cooldown_seconds"] != RETRY_POLICY.cooldowns.global_cooldown or
             old_retry_config["session_cache_ttl_seconds"] != SESSION_CACHE_TTL_SECONDS
         )
 

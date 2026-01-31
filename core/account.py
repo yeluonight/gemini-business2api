@@ -95,7 +95,6 @@ class CooldownConfig:
     text: int
     images: int
     videos: int
-    global_cooldown: int
 
 
 @dataclass(frozen=True)
@@ -141,11 +140,9 @@ class AccountManager:
         self.text_rate_limit_cooldown_seconds = retry_policy.cooldowns.text
         self.images_rate_limit_cooldown_seconds = retry_policy.cooldowns.images
         self.videos_rate_limit_cooldown_seconds = retry_policy.cooldowns.videos
-        self.global_cooldown_seconds = retry_policy.cooldowns.global_cooldown  # 新增：全局冷却
         self.jwt_manager: Optional['JWTManager'] = None  # 延迟初始化
         self.is_available = True
         self.last_error_time = 0.0  # 保留用于统计
-        self.last_cooldown_time = 0.0  # 全局冷却时间戳
         self.quota_cooldowns: Dict[str, float] = {}  # 按配额类型的冷却时间戳
         self.conversation_count = 0  # 累计成功次数（用于统计展示）
         self.failure_count = 0  # 累计失败次数（用于统计展示）
@@ -186,7 +183,6 @@ class AccountManager:
         self.text_rate_limit_cooldown_seconds = retry_policy.cooldowns.text
         self.images_rate_limit_cooldown_seconds = retry_policy.cooldowns.images
         self.videos_rate_limit_cooldown_seconds = retry_policy.cooldowns.videos
-        self.global_cooldown_seconds = retry_policy.cooldowns.global_cooldown  # 新增
 
     def handle_http_error(self, status_code: int, error_detail: str = "", request_id: str = "", quota_type: Optional[str] = None) -> None:
         """
@@ -702,7 +698,6 @@ def reload_accounts(
             "failure_count": account_mgr.failure_count,
             "is_available": account_mgr.is_available,
             "last_error_time": account_mgr.last_error_time,
-            "last_cooldown_time": account_mgr.last_cooldown_time,
             "session_usage_count": account_mgr.session_usage_count,
             "quota_cooldowns": dict(account_mgr.quota_cooldowns),
         }
@@ -725,7 +720,6 @@ def reload_accounts(
             account_mgr.failure_count = stats.get("failure_count", 0)
             account_mgr.is_available = stats.get("is_available", True)
             account_mgr.last_error_time = stats.get("last_error_time", 0.0)
-            account_mgr.last_cooldown_time = stats.get("last_cooldown_time", 0.0)
             account_mgr.session_usage_count = stats.get("session_usage_count", 0)
             account_mgr.quota_cooldowns = stats.get("quota_cooldowns", {})
             logger.debug(f"[CONFIG] Account {account_id} refreshed; runtime state preserved")

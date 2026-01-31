@@ -106,12 +106,6 @@
                 <label class="col-span-2 text-xs text-muted-foreground">视频冷却（小时）</label>
                 <input v-model.number="videosRateLimitCooldownHours" type="number" min="1" max="24" step="1" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
 
-                <div class="col-span-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                  <span>全局冷却（小时）</span>
-                  <HelpTip text="用于 401/403/502/503 等全局错误的冷却时间，冷却期后账户自动恢复" />
-                </div>
-                <input v-model.number="globalCooldownHours" type="number" min="0.08" max="24" step="0.5" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
-
                 <label class="col-span-2 text-xs text-muted-foreground">会话缓存秒数</label>
                 <input v-model.number="localSettings.retry.session_cache_ttl_seconds" type="number" min="0" class="col-span-2 rounded-2xl border border-input bg-background px-3 py-2" />
 
@@ -423,16 +417,6 @@ const videosRateLimitCooldownHours = createCooldownHours(
   'videos_rate_limit_cooldown_seconds',
   DEFAULT_COOLDOWN_HOURS.videos
 )
-
-// 全局冷却时间（小时）
-const globalCooldownHours = computed({
-  get: () => (localSettings.value?.retry?.global_cooldown_seconds || 3600) / 3600,
-  set: (hours: number) => {
-    if (localSettings.value?.retry) {
-      localSettings.value.retry.global_cooldown_seconds = Math.round(hours * 3600)
-    }
-  }
-})
 
 const browserEngineOptions = [
   { label: 'UC - 支持无头/有头', value: 'uc' },
