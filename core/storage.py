@@ -322,6 +322,38 @@ def _init_sqlite_tables(conn: sqlite3.Connection) -> None:
             ON task_history(created_at)
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS request_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp INTEGER NOT NULL,
+                model TEXT NOT NULL,
+                ttfb_ms INTEGER,
+                total_ms INTEGER,
+                status TEXT NOT NULL,
+                status_code INTEGER,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS request_logs_timestamp_idx
+            ON request_logs(timestamp)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS request_logs_model_idx
+            ON request_logs(model)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS request_logs_status_idx
+            ON request_logs(status)
+            """
+        )
 
 
 # ==================== Accounts storage ====================

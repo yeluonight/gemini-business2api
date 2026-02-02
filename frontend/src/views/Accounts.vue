@@ -94,18 +94,29 @@
         <button
           class="rounded-full border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors
                  hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
-          :disabled="isRegistering"
+          :disabled="isRegistering || isRefreshing"
           @click="openRegisterModal"
         >
           添加账户
         </button>
 
         <button
-          class="rounded-full border border-border px-4 py-2 text-sm font-medium transition-colors
+          class="relative rounded-full border border-border px-4 py-2 text-sm font-medium transition-colors
                  hover:border-primary hover:text-primary"
           @click="openTaskModal"
         >
-          任务管理
+          <span class="flex items-center gap-2">
+            任务管理
+            <template v-if="isTaskRunning">
+              <span class="flex items-center gap-1.5 text-xs text-sky-500">
+                <span class="relative flex h-2 w-2">
+                  <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-500 opacity-75"></span>
+                  <span class="relative inline-flex h-2 w-2 rounded-full bg-sky-500"></span>
+                </span>
+                {{ taskProgressText }}
+              </span>
+            </template>
+          </span>
         </button>
 
         <div ref="moreActionsRef" class="relative">
@@ -144,10 +155,10 @@
             <button
               type="button"
               class="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm transition-colors"
-              :class="isRefreshing
+              :class="isRegistering
                 ? 'cursor-not-allowed text-muted-foreground'
                 : 'text-foreground hover:bg-accent'"
-              :disabled="isRefreshing"
+              :disabled="isRegistering"
               @click="handleRefreshExpiring(); closeMoreActions()"
             >
               刷新过期
@@ -155,10 +166,10 @@
             <button
               type="button"
               class="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm transition-colors"
-              :class="!selectedCount || isRefreshing
+              :class="!selectedCount || isRegistering
                 ? 'cursor-not-allowed text-muted-foreground'
                 : 'text-foreground hover:bg-accent'"
-              :disabled="!selectedCount || isRefreshing"
+              :disabled="!selectedCount || isRegistering"
               @click="handleRefreshSelected(); closeMoreActions()"
             >
               刷新选中
@@ -272,8 +283,22 @@
             </div>
             <div>
               <p>冷却</p>
-              <p class="mt-1" :class="cooldownClass(account)">
-                {{ cooldownDisplay(account) }}
+              <p class="mt-1 flex items-center gap-1" :class="cooldownClass(account)">
+                <template v-if="cooldownDisplay(account) === 'normal'">
+                  <svg class="h-3.5 w-3.5 text-emerald-500" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                  </svg>
+                  <span>正常</span>
+                </template>
+                <template v-else-if="cooldownDisplay(account) === 'disabled'">
+                  <svg class="h-3.5 w-3.5 text-muted-foreground" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M13.477 14.89A6 6 0 015.11 6.524l8.367 8.368zm1.414-1.414L6.524 5.11a6 6 0 018.367 8.367zM18 10a8 8 0 11-16 0 8 8 0 0116 0z" clip-rule="evenodd" />
+                  </svg>
+                  <span>手动禁用</span>
+                </template>
+                <template v-else>
+                  {{ cooldownDisplay(account) }}
+                </template>
               </p>
             </div>
             <div>
@@ -392,7 +417,23 @@
                 <span v-else class="text-xs text-muted-foreground">-</span>
               </td>
               <td class="py-4 pr-6 text-xs" :class="cooldownClass(account)">
-                {{ cooldownDisplay(account) }}
+                <span class="flex items-center gap-1">
+                  <template v-if="cooldownDisplay(account) === 'normal'">
+                    <svg class="h-3.5 w-3.5 text-emerald-500" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                    </svg>
+                    <span>正常</span>
+                  </template>
+                  <template v-else-if="cooldownDisplay(account) === 'disabled'">
+                    <svg class="h-3.5 w-3.5 text-muted-foreground" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M13.477 14.89A6 6 0 015.11 6.524l8.367 8.368zm1.414-1.414L6.524 5.11a6 6 0 018.367 8.367zM18 10a8 8 0 11-16 0 8 8 0 0116 0z" clip-rule="evenodd" />
+                    </svg>
+                    <span>手动禁用</span>
+                  </template>
+                  <template v-else>
+                    {{ cooldownDisplay(account) }}
+                  </template>
+                </span>
               </td>
               <td class="py-4 pr-6 text-xs text-muted-foreground">
                 {{ account.failure_count }}
@@ -553,7 +594,12 @@
           </div>
 
           <div class="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] leading-relaxed">
-            <p class="text-xs font-bold text-rose-600">⚠️ 严禁滥用：禁止将本工具用于商业用途或任何形式的滥用（无论规模大小）</p>
+            <p class="flex items-center gap-1.5 text-xs font-bold text-rose-600">
+              <svg class="h-4 w-4 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
+              </svg>
+              严禁滥用：禁止将本工具用于商业用途或任何形式的滥用（无论规模大小）
+            </p>
             <p class="mt-1 text-muted-foreground">详细声明请查看项目 <a href="https://github.com/Dreamy-rain/gemini-business2api/blob/main/docs/DISCLAIMER.md" target="_blank" class="text-primary hover:underline font-medium">DISCLAIMER.md</a></p>
           </div>
           <Checkbox v-model="registerAgreed">
@@ -855,7 +901,12 @@
         <!-- 历史记录 Tab -->
         <div v-if="activeTaskTab === 'history'" class="flex min-h-0 flex-1 flex-col">
           <div class="flex-1 overflow-y-auto px-6 py-4">
-            <div v-if="isLoadingHistory" class="py-8"></div>
+            <div v-if="isLoadingHistory" class="flex items-center justify-center py-8">
+              <svg class="h-6 w-6 animate-spin text-muted-foreground" viewBox="0 0 24 24" fill="none">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            </div>
             <div v-else-if="taskHistory.length === 0" class="rounded-2xl border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
               <p class="font-medium text-foreground mb-2">暂无历史记录</p>
               <p>完成的任务将显示在这里</p>
@@ -1207,6 +1258,7 @@ const loginLogClearMarker = ref<TaskLogLine | null>(null)
 const registerAgreed = ref(false)
 const registerTask = ref<RegisterTask | null>(null)
 const loginTask = ref<LoginTask | null>(null)
+const refreshingAccountIds = ref<Set<string>>(new Set())  // 正在刷新的账户ID集合（仅用于显示状态）
 const taskLogsRef = ref<HTMLDivElement | null>(null)
 const isRegistering = ref(false)
 const isRefreshing = ref(false)
@@ -2191,6 +2243,24 @@ const isTaskRunning = computed(() => {
     loginStatus === 'pending'
 })
 
+const taskProgressText = computed(() => {
+  const register = registerTask.value
+  const login = loginTask.value
+  const registerActive = register?.status === 'running' || register?.status === 'pending'
+  const loginActive = login?.status === 'running' || login?.status === 'pending'
+
+  if (registerActive && loginActive) {
+    return `注册 ${register.progress}/${register.count} | 刷新 ${login.progress}/${login.account_ids.length}`
+  }
+  if (registerActive) {
+    return `注册 ${register.progress}/${register.count}`
+  }
+  if (loginActive) {
+    return `刷新 ${login.progress}/${login.account_ids.length}`
+  }
+  return ''
+})
+
 onBeforeUnmount(() => {
   clearRegisterTimer()
   clearLoginTimer()
@@ -2199,6 +2269,10 @@ onBeforeUnmount(() => {
 })
 
 const statusLabel = (account: AdminAccount) => {
+  // 检查是否正在刷新
+  if (refreshingAccountIds.value.has(account.id)) {
+    return '刷新中'
+  }
   if (account.cooldown_reason?.includes('429') && account.cooldown_seconds > 0) {
     return '429限流'
   }
@@ -2216,6 +2290,9 @@ const statusLabel = (account: AdminAccount) => {
 
 const statusClass = (account: AdminAccount) => {
   const status = statusLabel(account)
+  if (status === '刷新中') {
+    return 'bg-sky-500 text-white'
+  }
   if (status === '429限流' || status === '即将过期') {
     return 'bg-amber-200 text-amber-900'
   }
@@ -2275,11 +2352,11 @@ const cooldownDisplay = (account: AdminAccount) => {
 
   // 手动禁用
   if (account.disabled) {
-    return '⛔ 手动禁用'
+    return 'disabled'
   }
 
   // 正常可用
-  return '✅ 正常'
+  return 'normal'
 }
 
 const rowClass = (account: AdminAccount) => {
@@ -2731,11 +2808,20 @@ const updateLoginTask = async (taskId: string) => {
     if (error?.status === 404 || error?.message === 'Not found') {
       clearLoginTimer()
       isRefreshing.value = false
+      refreshingAccountIds.value = new Set()  // 清空刷新状态
       return
     }
     throw error
   }
   syncLoginTask(task)
+
+  // 更新正在刷新的账户列表
+  if (task.status === 'running' || task.status === 'pending') {
+    refreshingAccountIds.value = new Set(task.account_ids || [])
+  } else {
+    refreshingAccountIds.value = new Set()  // 任务完成，清空刷新状态
+  }
+
   if (task.status !== 'running' && task.status !== 'pending') {
     isRefreshing.value = false
     clearLoginTimer()
@@ -2822,20 +2908,29 @@ const handleRegister = async () => {
   }
 }
 
-const handleRefreshSelected = async () => {
-  if (!selectedIds.value.size) return
+// 统一的刷新函数 - 所有刷新入口都调用这个
+const startRefresh = async (accountIds: string[]) => {
+  if (!accountIds.length) return
   automationError.value = ''
   isRefreshing.value = true
   try {
-    const task = await accountsApi.startLogin(Array.from(selectedIds.value))
+    const task = await accountsApi.startLogin(accountIds)
     syncLoginTask(task)
+    // 更新正在刷新的账户列表
+    refreshingAccountIds.value = new Set(task.account_ids || [])
     startLoginPolling(task.id)
     // 自动打开任务状态弹窗
     openTaskModal()
   } catch (error: any) {
     automationError.value = error.message || '启动刷新失败'
+    toast.error(error.message || '启动刷新失败')
     isRefreshing.value = false
   }
+}
+
+const handleRefreshSelected = async () => {
+  if (!selectedIds.value.size) return
+  await startRefresh(Array.from(selectedIds.value))
 }
 
 const handleRefreshExpiring = async () => {
@@ -2845,6 +2940,8 @@ const handleRefreshExpiring = async () => {
     const taskOrIdle = await accountsApi.checkLogin()
     if (taskOrIdle && 'id' in taskOrIdle) {
       syncLoginTask(taskOrIdle)
+      // 更新正在刷新的账户列表
+      refreshingAccountIds.value = new Set(taskOrIdle.account_ids || [])
       startLoginPolling(taskOrIdle.id)
       // 自动打开任务状态弹窗
       openTaskModal()
@@ -2854,6 +2951,8 @@ const handleRefreshExpiring = async () => {
     const current = await accountsApi.getLoginCurrent()
     if (current && 'id' in current) {
       syncLoginTask(current)
+      // 更新正在刷新的账户列表
+      refreshingAccountIds.value = new Set(current.account_ids || [])
       startLoginPolling(current.id)
       openTaskModal()
       return
@@ -2861,6 +2960,7 @@ const handleRefreshExpiring = async () => {
     isRefreshing.value = false
   } catch (error: any) {
     automationError.value = error.message || '触发刷新失败'
+    toast.error(error.message || '触发刷新失败')
     isRefreshing.value = false
   }
 }

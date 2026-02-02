@@ -34,7 +34,7 @@ class LoginTask(BaseTask):
 
 
 class LoginService(BaseTaskService[LoginTask]):
-    """登录服务类"""
+    """登录服务类 - 统一任务管理"""
 
     def __init__(
         self,
@@ -58,24 +58,61 @@ class LoginService(BaseTaskService[LoginTask]):
         )
         self._is_polling = False
 
-    async def start_login(self, account_ids: List[str]) -> LoginTask:
-        """启动登录任务（支持排队）。"""
-        async with self._lock:
-            # 去重：同一批账号的 pending/running 任务直接复用
-            normalized = list(account_ids or [])
-            for existing in self._tasks.values():
-                if (
-                    isinstance(existing, LoginTask)
-                    and existing.account_ids == normalized
-                    and existing.status in (TaskStatus.PENDING, TaskStatus.RUNNING)
-                ):
-                    return existing
+    def _get_running_task(self) -> Optional[LoginTask]:
+        """获取正在运行或等待中的任务"""
+        for task in self._tasks.values():
+            if isinstance(task, LoginTask) and task.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
+                return task
+        return None
 
-            task = LoginTask(id=str(uuid.uuid4()), account_ids=normalized)
+    async def start_login(self, account_ids: List[str]) -> LoginTask:
+        """
+        启动登录任务 - 统一任务管理
+        - 如果有正在运行的任务，将新账户添加到该任务（去重）
+        - 如果没有正在运行的任务，创建新任务
+        """
+        async with self._lock:
+            if not account_ids:
+                raise ValueError("账户列表不能为空")
+
+            # 检查是否有正在运行的任务
+            running_task = self._get_running_task()
+
+            if running_task:
+                # 将新账户添加到现有任务（去重）
+                new_accounts = [aid for aid in account_ids if aid not in running_task.account_ids]
+
+                if new_accounts:
+                    running_task.account_ids.extend(new_accounts)
+                    self._append_log(
+                        running_task,
+                        "info",
+                        f"📝 添加 {len(new_accounts)} 个账户到现有任务 (总计: {len(running_task.account_ids)})"
+                    )
+                else:
+                    self._append_log(running_task, "info", "📝 所有账户已在当前任务中")
+
+                return running_task
+
+            # 创建新任务
+            task = LoginTask(id=str(uuid.uuid4()), account_ids=list(account_ids))
             self._tasks[task.id] = task
             self._append_log(task, "info", f"📝 创建刷新任务 (账号数量: {len(task.account_ids)})")
-            await self._enqueue_task(task)
+
+            # 直接启动任务
+            self._current_task_id = task.id
+            asyncio.create_task(self._run_task_directly(task))
             return task
+
+    async def _run_task_directly(self, task: LoginTask) -> None:
+        """直接执行任务"""
+        try:
+            await self._run_one_task(task)
+        finally:
+            # 任务完成后清理
+            async with self._lock:
+                if self._current_task_id == task.id:
+                    self._current_task_id = None
 
     def _execute_task(self, task: LoginTask):
         return self._run_login_async(task)
@@ -273,12 +310,17 @@ class LoginService(BaseTaskService[LoginTask]):
 
 
     def _get_expiring_accounts(self) -> List[str]:
+        """获取即将过期的账户列表"""
         accounts = load_accounts_from_source()
         expiring = []
         beijing_tz = timezone(timedelta(hours=8))
         now = datetime.now(beijing_tz)
 
         for account in accounts:
+            account_id = account.get("id")
+            if not account_id:
+                continue
+
             if account.get("disabled"):
                 continue
             mail_provider = (account.get("mail_provider") or "").lower()
@@ -315,7 +357,7 @@ class LoginService(BaseTaskService[LoginTask]):
                 continue
 
             if remaining <= config.basic.refresh_window_hours:
-                expiring.append(account.get("id"))
+                expiring.append(account_id)
 
         return expiring
 

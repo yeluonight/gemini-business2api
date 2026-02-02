@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from util.streaming_parser import parse_json_array_stream_async
 from collections import deque
 from threading import Lock
+from core.database import stats_db
 
 # ---------- 数据目录配置 ----------
 DATA_DIR = "./data"
@@ -130,14 +131,18 @@ async def load_stats():
     return data
 
 async def save_stats(stats):
-    """保存统计数据（异步）。数据库不可用时不落盘。"""
-    stats_to_save = stats.copy()
-    if isinstance(stats_to_save.get("request_timestamps"), deque):
-        stats_to_save["request_timestamps"] = list(stats_to_save["request_timestamps"])
-    if isinstance(stats_to_save.get("failure_timestamps"), deque):
-        stats_to_save["failure_timestamps"] = list(stats_to_save["failure_timestamps"])
-    if isinstance(stats_to_save.get("rate_limit_timestamps"), deque):
-        stats_to_save["rate_limit_timestamps"] = list(stats_to_save["rate_limit_timestamps"])
+    """保存统计数据(异步)。数据库不可用时不落盘。"""
+    def convert_deques(obj):
+        """递归转换所有 deque 对象为 list"""
+        if isinstance(obj, deque):
+            return list(obj)
+        elif isinstance(obj, dict):
+            return {k: convert_deques(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_deques(item) for item in obj]
+        return obj
+
+    stats_to_save = convert_deques(stats)
 
     if storage.is_database_enabled():
         try:
@@ -789,6 +794,10 @@ async def startup_event():
     asyncio.create_task(multi_account_mgr.start_background_cleanup())
     logger.info("[SYSTEM] 后台缓存清理任务已启动（间隔: 5分钟）")
 
+    # 启动数据库清理任务
+    asyncio.create_task(cleanup_database_task())
+    logger.info("[SYSTEM] 数据库清理任务已启动（每天清理一次，保留30天数据）")
+
     # 启动自动刷新账号任务（仅数据库模式有效）
     if os.environ.get("ACCOUNTS_CONFIG"):
         logger.info("[SYSTEM] 自动刷新账号已跳过（使用 ACCOUNTS_CONFIG）")
@@ -807,6 +816,17 @@ async def startup_event():
             logger.error(f"[SYSTEM] 启动登录服务失败: {e}")
     else:
         logger.info("[SYSTEM] 自动登录刷新未启用或依赖不可用")
+
+
+async def cleanup_database_task():
+    """定时清理数据库过期数据"""
+    while True:
+        try:
+            await asyncio.sleep(24 * 3600)  # 每天执行一次
+            deleted_count = await stats_db.cleanup_old_data(days=30)
+            logger.info(f"[DATABASE] 清理了 {deleted_count} 条过期数据（保留30天）")
+        except Exception as e:
+            logger.error(f"[DATABASE] 清理数据失败: {e}")
 
 # ---------- 日志脱敏函数 ----------
 def get_sanitized_logs(limit: int = 100) -> list:
@@ -1074,9 +1094,14 @@ async def admin_logout(request: Request):
 
 @app.get("/admin/stats")
 @require_login()
-async def admin_stats(request: Request):
+async def admin_stats(request: Request, time_range: str = "24h"):
+    """
+    获取统计数据
+
+    Args:
+        time_range: 时间范围 "24h", "7d", "30d"
+    """
     now = time.time()
-    window_seconds = 12 * 3600
 
     active_accounts = 0
     failed_accounts = 0
@@ -1105,58 +1130,9 @@ async def admin_stats(request: Request):
 
     total_accounts = len(multi_account_mgr.accounts)
 
-    beijing_tz = timezone(timedelta(hours=8))
-    now_dt = datetime.now(beijing_tz)
-    start_dt = (now_dt - timedelta(hours=11)).replace(minute=0, second=0, microsecond=0)
-    start_ts = start_dt.timestamp()
-    labels = [(start_dt + timedelta(hours=i)).strftime("%H:00") for i in range(12)]
-
-    def bucketize(timestamps: list) -> list:
-        buckets = [0] * 12
-        for ts in timestamps:
-            idx = int((ts - start_ts) // 3600)
-            if 0 <= idx < 12:
-                buckets[idx] += 1
-        return buckets
-
-    async with stats_lock:
-        global_stats.setdefault("request_timestamps", deque(maxlen=20000))
-        global_stats.setdefault("failure_timestamps", deque(maxlen=10000))
-        global_stats.setdefault("rate_limit_timestamps", deque(maxlen=10000))
-        global_stats.setdefault("model_request_timestamps", {})
-        global_stats.setdefault("success_count", 0)
-        global_stats.setdefault("failed_count", 0)
-
-        # 清理过期数据，保持 deque 类型
-        cleaned_request_ts = [ts for ts in global_stats["request_timestamps"] if now - ts < window_seconds]
-        global_stats["request_timestamps"] = deque(cleaned_request_ts, maxlen=20000)
-
-        cleaned_failure_ts = [ts for ts in global_stats["failure_timestamps"] if now - ts < window_seconds]
-        global_stats["failure_timestamps"] = deque(cleaned_failure_ts, maxlen=10000)
-
-        cleaned_rate_limit_ts = [ts for ts in global_stats["rate_limit_timestamps"] if now - ts < window_seconds]
-        global_stats["rate_limit_timestamps"] = deque(cleaned_rate_limit_ts, maxlen=10000)
-
-        model_request_timestamps = {}
-        for model, timestamps in global_stats["model_request_timestamps"].items():
-            model_request_timestamps[model] = [
-                ts for ts in timestamps
-                if now - ts < window_seconds
-            ]
-        global_stats["model_request_timestamps"] = model_request_timestamps
-
-        await save_stats(global_stats)
-
-        request_timestamps = list(global_stats["request_timestamps"])
-        failure_timestamps = list(global_stats["failure_timestamps"])
-        rate_limit_timestamps = list(global_stats["rate_limit_timestamps"])
-        model_request_timestamps = global_stats.get("model_request_timestamps", {})
-        model_requests = {}
-        for model in MODEL_MAPPING.keys():
-            model_requests[model] = bucketize(model_request_timestamps.get(model, []))
-        for model, timestamps in model_request_timestamps.items():
-            if model not in model_requests:
-                model_requests[model] = bucketize(timestamps)
+    # 从数据库获取统计数据
+    trend_data = await stats_db.get_stats_by_time_range(time_range)
+    success_count, failed_count = await stats_db.get_total_counts()
 
     return {
         "total_accounts": total_accounts,
@@ -1164,15 +1140,9 @@ async def admin_stats(request: Request):
         "failed_accounts": failed_accounts,
         "rate_limited_accounts": rate_limited_accounts,
         "idle_accounts": idle_accounts,
-        "success_count": global_stats.get("success_count", 0),
-        "failed_count": global_stats.get("failed_count", 0),
-        "trend": {
-            "labels": labels,
-            "total_requests": bucketize(request_timestamps),
-            "failed_requests": bucketize(failure_timestamps),
-            "rate_limited_requests": bucketize(rate_limit_timestamps),
-            "model_requests": model_requests,
-        }
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "trend": trend_data
     }
 
 @app.get("/admin/accounts")
@@ -1863,6 +1833,43 @@ async def chat_impl(
             global_stats.setdefault("failed_count", 0)
             global_stats.setdefault("account_conversations", {})
             global_stats.setdefault("account_failures", {})
+            global_stats.setdefault("response_times", deque(maxlen=10000))
+
+            # 记录响应时间（只记录成功的请求）
+            if status == "success" and latency_ms is not None:
+                # 记录首响时间和完成时间，按模型分类
+                ttfb_ms = int((first_response_time - start_ts) * 1000) if first_response_time else latency_ms
+                total_ms = int((time.time() - start_ts) * 1000)
+                model_name = req.model if req else "unknown"
+
+                global_stats["response_times"].append({
+                    "timestamp": time.time(),
+                    "ttfb_ms": ttfb_ms,  # 首响时间
+                    "total_ms": total_ms,  # 完成时间
+                    "model": model_name  # 模型名称
+                })
+
+                # 写入数据库
+                asyncio.create_task(stats_db.insert_request_log(
+                    timestamp=time.time(),
+                    model=model_name,
+                    ttfb_ms=ttfb_ms,
+                    total_ms=total_ms,
+                    status=status,
+                    status_code=status_code
+                ))
+            elif status != "success":
+                # 失败请求也记录到数据库
+                model_name = req.model if req else "unknown"
+                asyncio.create_task(stats_db.insert_request_log(
+                    timestamp=time.time(),
+                    model=model_name,
+                    ttfb_ms=None,
+                    total_ms=None,
+                    status=status,
+                    status_code=status_code
+                ))
+
             if status != "success":
                 global_stats["failed_count"] += 1
                 global_stats["failure_timestamps"].append(time.time())
