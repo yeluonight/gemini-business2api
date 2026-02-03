@@ -75,7 +75,7 @@ from core import uptime as uptime_tracker
 from core.config import config_manager, config
 
 # 数据库存储支持
-from core import storage
+from core import storage, account
 
 # 模型到配额类型的映射
 MODEL_TO_QUOTA_TYPE = {
@@ -1464,8 +1464,6 @@ async def admin_get_settings(request: Request):
             "output_format": config.video_generation.output_format
         },
         "retry": {
-            "max_new_session_tries": config.retry.max_new_session_tries,
-            "max_request_retries": config.retry.max_request_retries,
             "max_account_switch_tries": config.retry.max_account_switch_tries,
             "text_rate_limit_cooldown_seconds": config.retry.text_rate_limit_cooldown_seconds,
             "images_rate_limit_cooldown_seconds": config.retry.images_rate_limit_cooldown_seconds,
